@@ -1,0 +1,115 @@
+import tkinter as tk
+import serial
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+# CONEXION SERIAL
+stm32 = serial.Serial("COM3", 115200, timeout=0)
+# VENTANA PRINCIPAL
+ventana = tk.Tk()
+ventana.title("Control de Motor DC - STM32")
+ventana.geometry("900x700")
+titulo = tk.Label(
+    ventana,
+    text="CONTROL DE VELOCIDAD DEL MOTOR DC",
+    font=("Arial", 16, "bold")
+)
+titulo.pack(pady=10)
+label_sp = tk.Label(
+    ventana,
+    text="Setpoint: 0 RPM",
+    font=("Arial", 13)
+)
+label_sp.pack()
+# ENVIAR SETPOINT A STM32
+def cambiar_velocidad(valor):
+    velocidad = int(float(valor))
+    label_sp.config(text=f"Setpoint: {velocidad} RPM")
+    stm32.write(f"{velocidad}\n".encode())
+slider = tk.Scale(
+    ventana,
+    from_=0,
+    to=40,
+    orient="horizontal",
+    length=600,
+    command=cambiar_velocidad
+)
+slider.pack(pady=10)
+def detener_motor():
+    slider.set(0)
+    stm32.write(b"0\n")
+boton = tk.Button(
+    ventana,
+    text="DETENER MOTOR",
+    command=detener_motor,
+    bg="red",
+    fg="white",
+    font=("Arial", 12, "bold")
+)
+boton.pack(pady=10)
+label_rpm = tk.Label(
+    ventana,
+    text="RPM reales: 0.00",
+    font=("Arial", 13, "bold")
+)
+label_rpm.pack(pady=10)
+# GRAFICA
+figura, ax = plt.subplots(figsize=(9, 4))
+tiempos = []
+setpoints = []
+rpms = []
+linea_sp, = ax.plot([], [], "r-", label="Setpoint")
+linea_rpm, = ax.plot([], [], "b-", label="RPM reales")
+ax.set_title("Velocidad del motor en tiempo real")
+ax.set_xlabel("Tiempo (s)")
+ax.set_ylabel("RPM")
+ax.set_ylim(0, 45)
+ax.grid(True)
+ax.legend()
+canvas = FigureCanvasTkAgg(figura, master=ventana)
+canvas.get_tk_widget().pack(fill="both", expand=True)
+contador = 0
+buffer = ""
+# ACTUALIZAR DATOS
+def actualizar():
+    global contador, buffer
+    try:
+        datos = stm32.read(stm32.in_waiting).decode(errors="ignore")
+        buffer += datos
+        while "\n" in buffer:
+            linea, buffer = buffer.split("\n", 1)
+            valores = linea.strip().split(",")
+            if len(valores) == 2:
+                sp = float(valores[0]) / 100
+                rpm = float(valores[1]) / 100
+                tiempos.append(contador * 0.1)
+                setpoints.append(sp)
+                rpms.append(rpm)
+                contador += 1
+                label_rpm.config(text=f"RPM reales: {rpm:.2f}")
+        if len(tiempos) > 100:
+            tiempos[:] = tiempos[-100:]
+            setpoints[:] = setpoints[-100:]
+            rpms[:] = rpms[-100:]
+        if tiempos:
+            linea_sp.set_data(tiempos, setpoints)
+            linea_rpm.set_data(tiempos, rpms)
+            ax.set_xlim(
+                max(0, tiempos[-1] - 10),
+                max(10, tiempos[-1] + 1)
+            )
+            ax.set_ylim(0, max(45, max(rpms) + 5))
+            canvas.draw_idle()
+    except (ValueError, serial.SerialException) as error:
+        print("Error:", error)
+    ventana.after(100, actualizar)
+# CERRAR VENTANA
+def cerrar():
+    try:
+        stm32.write(b"0\n")
+        stm32.close()
+    except serial.SerialException:
+        pass
+    ventana.destroy()
+ventana.protocol("WM_DELETE_WINDOW", cerrar)
+actualizar()
+ventana.mainloop()
